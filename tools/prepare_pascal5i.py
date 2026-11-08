@@ -16,10 +16,19 @@ Split convention (standard PASCAL-5i):
 
 Usage:
     python tools/prepare_pascal5i.py --voc_root data/VOC2012
+    python tools/prepare_pascal5i.py --voc_root data/VOC2012 --drop_missing
+
+The BAM/PASCAL-5i splits assume VOC2012 + SBD masks. Plain VOC2012 has masks for
+only ~2913 images, so SBD-only ids have no ``SegmentationClass/*.png``. Pass
+``--drop_missing`` to drop pairs whose image/mask is absent (or whose mask does
+not contain the paired class). Without the flag the lists are written verbatim.
 """
 import argparse
 import os
 import sys
+
+import cv2
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,14 +45,32 @@ def read_pairs(path):
     return pairs
 
 
-def build(pairs, voc_root):
-    """Return (data_list, classwise) with repo-relative POSIX paths."""
+def build(pairs, voc_root, verify=False):
+    """Return (data_list, classwise, skipped) with repo-relative POSIX paths.
+
+    ``verify`` drops pairs whose image or mask is missing (or whose mask does
+    not contain ``cls``). Required when only VOC2012 masks are available.
+    """
     data_list = []
     seen_img = set()
     classwise = {}
+    skipped = 0
+    uniq_cache = {}
     for name, cls in sorted(pairs):
         img = "{}/JPEGImages/{}.jpg".format(voc_root, name).replace("\\", "/")
         mask = "{}/SegmentationClass/{}.png".format(voc_root, name).replace("\\", "/")
+        if verify:
+            img_fs = os.path.join(ROOT, img)
+            mask_fs = os.path.join(ROOT, mask)
+            if not (os.path.isfile(img_fs) and os.path.isfile(mask_fs)):
+                skipped += 1
+                continue
+            if name not in uniq_cache:
+                m = cv2.imread(mask_fs, cv2.IMREAD_GRAYSCALE)
+                uniq_cache[name] = set(np.unique(m).tolist()) if m is not None else set()
+            if cls not in uniq_cache[name]:
+                skipped += 1
+                continue
         pair = (img, mask)
         if name not in seen_img:
             seen_img.add(name)
@@ -51,7 +78,7 @@ def build(pairs, voc_root):
         lst = classwise.setdefault(cls, [])
         if pair not in lst:
             lst.append(pair)
-    return data_list, classwise
+    return data_list, classwise, skipped
 
 
 def write_list(path, data_list):
@@ -142,6 +169,9 @@ def main():
     ap.add_argument("--voc_root", default="data/VOC2012",
                     help="VOC2012 root containing JPEGImages/ and SegmentationClass/")
     ap.add_argument("--splits_dir", default=os.path.join(ROOT, "data", "splits", "pascal"))
+    ap.add_argument("--drop_missing", action="store_true",
+                    help="drop pairs whose image/mask is missing or whose mask lacks the class "
+                         "(needed when only VOC2012 masks are present, no SBD)")
     args = ap.parse_args()
 
     voc_root = args.voc_root.replace("\\", "/")
@@ -165,13 +195,14 @@ def main():
             trn_pairs += read_pairs(os.path.join(args.splits_dir, "trn", "fold{}.txt".format(fold)))
         val_pairs = read_pairs(os.path.join(args.splits_dir, "val", "fold{}.txt".format(split)))
 
-        train_data, train_cw = build(trn_pairs, voc_root)
-        val_data, val_cw = build(val_pairs, voc_root)
+        train_data, train_cw, train_skipped = build(trn_pairs, voc_root, verify=args.drop_missing)
+        val_data, val_cw, val_skipped = build(val_pairs, voc_root, verify=args.drop_missing)
 
         novel = set(range(5 * split + 1, 5 * split + 6))
         base = set(range(1, 21)) - novel
-        assert set(train_cw) == base, (split, "train classes", sorted(train_cw))
-        assert set(val_cw) == novel, (split, "val classes", sorted(val_cw))
+        assert train_cw and val_cw, (split, "empty list after filtering")
+        assert set(train_cw) <= base, (split, "train has novel classes", sorted(set(train_cw) - base))
+        assert set(val_cw) <= novel, (split, "val has base classes", sorted(set(val_cw) - novel))
         assert all(len(v) >= 2 for v in train_cw.values()), "train class with <2 imgs"
         assert all(len(v) >= 2 for v in val_cw.values()), "val class with <2 imgs"
 
@@ -190,6 +221,9 @@ def main():
 
         print("split {}: train imgs={} ({} base classes) | val imgs={} ({} novel classes)"
               .format(split, len(train_data), len(train_cw), len(val_data), len(val_cw)))
+        if args.drop_missing:
+            print("         dropped {} train pairs + {} val pairs (missing image/mask/class)"
+                  .format(train_skipped, val_skipped))
 
     print("done -> lists/pascal/** and config/pascal/**")
 
