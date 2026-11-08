@@ -241,6 +241,19 @@ class SemData(Dataset):
         # 每个列表包含对应的图片和其掩码的路径位置
         self.sub_class_file_list = eval(f_str)
 
+        if data_set == 'pascal':
+            missing = [(img, msk) for img, msk in self.data_list
+                       if not (os.path.isfile(img) and os.path.isfile(msk))]
+            if missing:
+                sample = "\n  ".join("{}\n  {}".format(i, m) for i, m in missing[:3])
+                raise RuntimeError(
+                    "{} of {} pascal list entries reference a missing image/mask "
+                    "(cwd={}):\n  {}\n"
+                    "The PASCAL-5i lists are stale or were built without masks. "
+                    "Run from the dir that holds data/VOC2012:\n"
+                    "  python tools/prepare_pascal5i.py --voc_root data/VOC2012 --drop_missing"
+                    .format(len(missing), len(self.data_list), os.getcwd(), sample))
+
         self.transform = transform
 
         self.ft_transform = ft_transform
