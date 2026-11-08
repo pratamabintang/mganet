@@ -22,7 +22,7 @@ class PrototypeContrastLoss(nn.Module, ABC):
     def _class_construct(self, pros, labels_):  # 0,0,0,1,2,3,4
         unique_labels = torch.unique(labels_)  # 得到bs个的标签类别 0,1,2,3,4
         for i in range(len(pros)):
-            pros[i]=pros[i].unsqueeze(1)    #8,1,256,1,1
+            pros[i]=pros[i].float().unsqueeze(1)    #8,1,256,1,1  # keep prototypes fp32 even under AMP
         pros = torch.cat(pros,dim=1) # bs,k,c,1,1 这里形状是对的
         #pros = pros.view(-1,pros.shape[-3],pros.shape[-2],pros.shape[-1]) #bs*k,c,1,1----8,256,1,1
         pro_dict = dict()

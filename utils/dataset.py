@@ -131,7 +131,7 @@ class SemData(Dataset):
                         ms_transform=None, max_sp= 5):
 
         assert mode in ['train', 'val', 'demo', 'finetune']
-        assert data_set in ['iSAID','LoveDA']
+        assert data_set in ['iSAID', 'LoveDA', 'pascal']
         if mode == 'finetune':
             assert ft_transform is not None
             assert ft_aug_size is not None
@@ -141,6 +141,8 @@ class SemData(Dataset):
             self.num_classes = 15
         elif data_set == 'LoveDA':
             self.num_classes = 6
+        elif data_set == 'pascal':
+            self.num_classes = 20
         self.max_sp = max_sp
         self.mode = mode #train
         self.split = split   # 0代表现在是第几个fold
@@ -187,6 +189,12 @@ class SemData(Dataset):
                 elif self.split == 0:
                     self.sub_list = list(range(21, 81)) 
                     self.sub_val_list = list(range(1, 21))           
+
+        elif data_set == 'pascal':
+            # PASCAL-5i: split f -> novel = 5f+1..5f+5, base = the other 15
+            self.class_list = list(range(1, 21))
+            self.sub_val_list = list(range(5 * self.split + 1, 5 * self.split + 6))
+            self.sub_list = [c for c in self.class_list if c not in self.sub_val_list]
 
         print('sub_list: ', self.sub_list) # [6-15]
         print('sub_val_list: ', self.sub_val_list)#[1-5]    

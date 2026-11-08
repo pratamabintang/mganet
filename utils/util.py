@@ -11,10 +11,8 @@ from matplotlib.pyplot import MultipleLocator
 from matplotlib.ticker import FuncFormatter, FormatStrFormatter
 from matplotlib import font_manager
 from matplotlib import rcParams
-import seaborn as sns
 import pandas as pd
 import math
-from seaborn.distributions import distplot
 from tqdm import tqdm
 from scipy import ndimage
 

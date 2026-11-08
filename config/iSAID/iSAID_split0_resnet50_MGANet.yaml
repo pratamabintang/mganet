@@ -56,6 +56,9 @@ Train:
   test_seed: 321
   seed_deterministic: False
   zoom_factor: 8  # zoom factor for final prediction during training, be in [1, 2, 4, 8]
+  # AMP (mixed precision)
+  amp: False          # enable automatic mixed precision
+  amp_dtype: 'bfloat16'  # 'bfloat16' (no GradScaler) or 'float16' (uses GradScaler)
 
 Method:
   layers: 50  # backbone layers

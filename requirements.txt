@@ -1,4 +1,17 @@
-argparse
-opencv-python
-os
+# Core (install GPU build on Colab: see https://pytorch.org/get-started/locally/)
+torch
+torchvision
 numpy
+opencv-python
+scipy
+scikit-learn
+scikit-image
+networkx
+# IO / viz / logging
+matplotlib
+pandas
+Pillow
+tqdm
+tensorboardX
+visdom
+PyYAML

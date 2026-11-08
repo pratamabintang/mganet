@@ -534,7 +534,8 @@ class OneModel(nn.Module):
             class_mask = class_map.max(1)[1]  # 1,32,32s
             class_prob = class_map.max(1)[0].unsqueeze(1)  # 1,1,32,32
             
-            idx1 = torch.where(class_mask == self.KMS_index)
+            # foreground / query channel is the last one: [base protos..., bp, fp]
+            idx1 = torch.where(class_mask == (class_map.shape[1] - 1))
             idx2 = torch.where(class_mask != self.KMS_index)
             class_mask[idx1] = 1 # 
             class_mask[idx2] = 0

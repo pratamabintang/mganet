@@ -8,7 +8,6 @@ import logging
 import argparse
 import math
 import os.path as osp
-from torchsummary import summary
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
@@ -31,7 +30,35 @@ from utils.util import AverageMeter, poly_learning_rate, intersectionAndUnionGPU
 
 cv2.ocl.setUseOpenCL(False)
 cv2.setNumThreads(0)
-os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+# Colab / single-GPU friendly: index 0 is the first visible device
+os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
+
+
+def amp_enabled():
+    # args is a CfgNode (dict-like); default off when key absent.
+    # Also require a CUDA device: fp16 autocast is unsupported on CPU and
+    # bf16 on CPU gives no practical speedup.
+    return bool(args.get('amp', False)) and torch.cuda.is_available()
+
+
+def get_amp_dtype():
+    return torch.bfloat16 if str(args.get('amp_dtype', 'bfloat16')).lower() == 'bfloat16' else torch.float16
+
+
+def get_amp_device():
+    return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def get_amp_scaler():
+    # GradScaler is only needed for float16; bfloat16 has fp32-range exponents
+    return torch.amp.GradScaler(get_amp_device(),
+                                enabled=amp_enabled() and get_amp_dtype() == torch.float16)
+
+
+def autocast_ctx():
+    # torch.amp API works on torch>=2.3 (forward-compatible with Colab runtimes)
+    return torch.amp.autocast(get_amp_device(), enabled=amp_enabled(), dtype=get_amp_dtype())
+
 
 def get_parser():
     parser = argparse.ArgumentParser(description='PyTorch Few-Shot Semantic Segmentation')
@@ -115,6 +142,19 @@ def main_process():
     return not args.distributed or (args.distributed and (args.local_rank == 0))
 
 
+def worker_init_fn(worker_id):
+    # Runs once per DataLoader worker *after* torch has seeded RNG.
+    # - keep OpenCV single-threaded inside each worker (not inherited under spawn)
+    # - (re)seed python/numpy deterministically from torch's per-worker seed
+    cv2.setNumThreads(0)
+    info = torch.utils.data.get_worker_info()
+    if info is not None:
+        s = info.seed % (2 ** 32)  # numpy requires 0..2**32-1
+        random.seed(s)
+        np.random.seed(s)
+        torch.manual_seed(s)
+
+
 def main():
     global args, logger, writer
     args = get_parser()
@@ -153,7 +193,7 @@ def main():
         transform.ToTensor(),
         transform.Normalize(mean=mean, std=std)])
 
-    if args.data_set == 'iSAID' or args.data_set == 'LoveDA':
+    if args.data_set == 'iSAID' or args.data_set == 'LoveDA' or args.data_set == 'pascal':
         train_data = dataset.SemData(split=args.split, shot=args.shot,
                                      data_root=args.data_root,
                                      data_list=args.train_list,
@@ -166,7 +206,9 @@ def main():
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size,
                                                num_workers=args.workers, \
                                                pin_memory=True, sampler=train_sampler, drop_last=True, \
-                                               shuffle=False if args.distributed else True)
+                                               shuffle=False if args.distributed else True, \
+                                               worker_init_fn=worker_init_fn, \
+                                               persistent_workers=args.workers > 0)
     # Val
     if args.evaluate:
         if args.resized_val:
@@ -179,7 +221,7 @@ def main():
                 transform.test_Resize(size=args.val_size),
                 transform.ToTensor(),
                 transform.Normalize(mean=mean, std=std)])
-        if args.data_set == 'iSAID' or args.data_set == 'LoveDA':
+        if args.data_set == 'iSAID' or args.data_set == 'LoveDA' or args.data_set == 'pascal':
             val_data = dataset.SemData(split=args.split, shot=args.shot,
                                        data_root=args.data_root,
                                        data_list=args.val_list, \
@@ -187,7 +229,9 @@ def main():
                                        mode='val', \
                                        data_set=args.data_set, use_split_coco=args.use_split_coco)
         val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size_val, shuffle=False,
-                                                 num_workers=args.workers, pin_memory=True, sampler=None)
+                                                 num_workers=args.workers, pin_memory=True, sampler=None,
+                                                 worker_init_fn=worker_init_fn,
+                                                 persistent_workers=args.workers > 0)
 
     # ----------------------  TRAINVAL  ----------------------
     global best_miou, best_FBiou, best_piou, best_epoch, keep_epoch, val_num
@@ -290,6 +334,8 @@ def train(train_loader, val_loader, model, optimizer, epoch, proto_dict=None,bp_
     if args.fix_bn:
         model.apply(fix_bn)  # fix batchnorm
 
+    scaler = get_amp_scaler()
+
     end = time.time()
     val_time = 0.
     
@@ -310,17 +356,19 @@ def train(train_loader, val_loader, model, optimizer, epoch, proto_dict=None,bp_
         target = target.cuda(non_blocking=True)
        
 
-        output, main_loss, aux_loss, proto_dict ,bp_proto_dict= model(s_x=s_input, s_y=s_mask,
-                                                                               x=input, y=target, classes=subcls,
-                                                                               proto_dict=proto_dict,bp_proto_dict=bp_proto_dict,
-                                                                               current_iter=current_iter,start_loss = args.start_loss*len(train_loader))
+        with autocast_ctx():
+            output, main_loss, aux_loss, proto_dict ,bp_proto_dict= model(s_x=s_input, s_y=s_mask,
+                                                                           x=input, y=target, classes=subcls,
+                                                                           proto_dict=proto_dict,bp_proto_dict=bp_proto_dict,
+                                                                           current_iter=current_iter,start_loss = args.start_loss*len(train_loader))
 
         loss = main_loss + args.aux_weight * (aux_loss )
        
         optimizer.zero_grad()
         if current_iter >= args.start_loss*len(train_loader):
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
 
         n = input.size(0)  # batch_size
@@ -426,6 +474,9 @@ def validate(val_loader, model, proto_dict, current_iter):
     elif args.data_set == 'LoveDA':
         test_num = 1000  # 20000
         split_gap = 2
+    elif args.data_set == 'pascal':
+        test_num = 1000
+        split_gap = 5
     class_intersection_meter = [0] * split_gap
     class_union_meter = [0] * split_gap
 
@@ -460,8 +511,9 @@ def validate(val_loader, model, proto_dict, current_iter):
             
 
             start_time = time.time()
-            output= model(s_x=s_input, s_y=s_mask, x=input, y=target, classes=subcls, proto_dict=proto_dict,
-                           current_iter=current_iter)
+            with autocast_ctx():
+                output= model(s_x=s_input, s_y=s_mask, x=input, y=target, classes=subcls, proto_dict=proto_dict,
+                               current_iter=current_iter)
             model_time.update(time.time() - start_time)
 
             if args.ori_resize:  # 
@@ -472,7 +524,7 @@ def validate(val_loader, model, proto_dict, current_iter):
 
             output = F.interpolate(output, size=target.size()[1:], mode='bilinear', align_corners=True)
 
-            loss = criterion(output, target)
+            loss = criterion(output.float(), target)
 
             output = output.max(1)[1]
 

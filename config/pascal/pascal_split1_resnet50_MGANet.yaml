@@ -1,0 +1,67 @@
+Data:
+  data_root: data/VOC2012
+  base_data_root: ./data/base_annotation/pascal/
+  train_list: ./lists/pascal/fss_list/train/data_list_1.txt
+  val_list: ./lists/pascal/fss_list/val/data_list_1.txt
+  classes: 2
+
+Train:
+  methods: 'Multi-Similarity-MFG'
+  train_h: 473
+  train_w: 473
+  val_size: 473
+  scale_min: 0.9
+  scale_max: 1.1
+  rotate_min: -10
+  rotate_max: 10
+  ignore_label: 255
+  padding_label: 255
+  ppm_scales: [1.0]
+  count: 3
+  split: 1
+  shot: 1
+  aplha: 0.7
+  beta: 0.3
+  data_set: 'pascal'
+  use_split_coco: False
+  batch_size: 4
+  base_lr: 0.004
+  epochs: 200
+  start_epoch: 0
+  stop_interval: 175
+  index_split: -1
+  power: 0.9
+  momentum: 0.9
+  weight_decay: 0.0001
+  warmup: False
+  print_freq: 10
+  save_freq: 50
+  resume:
+  evaluate: True
+  SubEpoch_val: True
+  fix_random_seed_val: True
+  batch_size_val: 1
+  resized_val: True
+  ori_resize: True
+  workers: 2
+  fix_bn: True
+  manual_seed: 321
+  test_seed: 321
+  seed_deterministic: False
+  zoom_factor: 8
+  amp: False
+  amp_dtype: 'bfloat16'
+
+Method:
+  layers: 50
+  vgg: False
+  aux_weight: 1.0
+  thresh_fp: 0.7
+  thresh_bp: 0.6
+  fuse_select: True
+  start_loss: 0.8
+
+Test_Finetune:
+  weight: ""
+  proto_dict_path: "./exp/MGANet_iSAID/pascal/MGANet/split1/resnet50/snapshotproto_dict.pth"
+  ann_type: 'mask'

@@ -32,7 +32,8 @@ from utils.util import AverageMeter, poly_learning_rate, intersectionAndUnionGPU
 
 cv2.ocl.setUseOpenCL(False)
 cv2.setNumThreads(0)
-os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+# Colab / single-GPU friendly: index 0 is the first visible device
+os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
 val_manual_seed = 123
 setup_seed(val_manual_seed, False)
 val_num = 10
@@ -96,6 +97,17 @@ def get_model(args):
     time.sleep(5)
     return model, optimizer
 
+def worker_init_fn(worker_id):
+    # Keep OpenCV single-threaded per worker (not inherited under spawn)
+    # and reseed python/numpy from torch's per-worker seed.
+    cv2.setNumThreads(0)
+    info = torch.utils.data.get_worker_info()
+    if info is not None:
+        s = info.seed % (2 ** 32)  # numpy requires 0..2**32-1
+        random.seed(s)
+        np.random.seed(s)
+        torch.manual_seed(s)
+
 def main():
     global args, logger, writer
     args = get_parser()
@@ -129,7 +141,7 @@ def main():
                 transform.test_Resize(size=args.val_size),
                 transform.ToTensor(),
                 transform.Normalize(mean=mean, std=std)])
-        if args.data_set == 'iSAID' or args.data_set == 'LoveDA':
+        if args.data_set == 'iSAID' or args.data_set == 'LoveDA' or args.data_set == 'pascal':
             val_data = dataset.SemData(split=args.split, shot=args.shot,
                                        data_root=args.data_root,
                                        data_list=args.val_list, \
@@ -137,7 +149,9 @@ def main():
                                        mode='val', \
                                        data_set=args.data_set, use_split_coco=args.use_split_coco)
         val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size_val, shuffle=False,
-                                                 num_workers=args.workers, pin_memory=True, sampler=None)
+                                                 num_workers=args.workers, pin_memory=True, sampler=None,
+                                                 worker_init_fn=worker_init_fn,
+                                                 persistent_workers=args.workers > 0)
 
     # ----------------------  VAL  ----------------------
     start_time = time.time()
@@ -190,6 +204,9 @@ def validate(val_loader, model, val_seed,split):
     elif args.data_set == 'LoveDA':
         test_num = 1000
         split_gap = 2
+    elif args.data_set == 'pascal':
+        test_num = 1000
+        split_gap = 5
     class_intersection_meter = [0]*split_gap
     class_union_meter = [0]*split_gap
 

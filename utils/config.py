@@ -3,8 +3,11 @@
 # -----------------------------------------------------------------------------
 import yaml
 import os
+import logging
 from ast import literal_eval
 import copy
+
+logger = logging.getLogger(__name__)
 
 
 class CfgNode(dict):
@@ -147,11 +150,7 @@ def _check_and_coerce_cfg_value_type(replacement, original, key, full_key):
     # Conditionally casts
     # list <-> tuple
     casts = [(tuple, list), (list, tuple)]
-    # For py2: allow converting from str (bytes) to a unicode string
-    try:
-        casts.append((str, unicode))  # noqa: F821
-    except Exception:
-        pass
+    # NOTE: Python 2 str->unicode cast removed; project targets Python 3.
 
     for (from_type, to_type) in casts:
         converted, converted_value = conditional_cast(from_type, to_type)
