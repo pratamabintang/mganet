@@ -178,6 +178,21 @@ def main():
     if not os.path.isdir(os.path.join(ROOT, args.splits_dir)):
         sys.exit("split dir not found: {}".format(args.splits_dir))
 
+    jpg_dir = os.path.join(ROOT, voc_root, "JPEGImages")
+    seg_dir = os.path.join(ROOT, voc_root, "SegmentationClass")
+    print("repo root      : {}".format(ROOT))
+    print("voc root       : {}".format(os.path.join(ROOT, voc_root)))
+    print("JPEGImages     : {} ({})".format(jpg_dir, "OK" if os.path.isdir(jpg_dir) else "MISSING"))
+    print("Segmentation   : {} ({})".format(seg_dir, "OK" if os.path.isdir(seg_dir) else "MISSING"))
+    if not os.path.isdir(jpg_dir):
+        sys.exit("JPEGImages dir not found: {}\n"
+                 "Run this from the repo root that actually contains data/VOC2012 "
+                 "(note: /content/MGANet and /content/mganet are different dirs)."
+                 .format(jpg_dir))
+    if args.drop_missing and not os.path.isdir(seg_dir):
+        sys.exit("SegmentationClass dir not found: {}\n"
+                 "Download/extract VOC2012 or point --voc_root at the right place.".format(seg_dir))
+
     needed = [
         os.path.join(args.splits_dir, "trn", "fold{}.txt".format(f)) for f in range(4)
     ] + [
@@ -200,7 +215,18 @@ def main():
 
         novel = set(range(5 * split + 1, 5 * split + 6))
         base = set(range(1, 21)) - novel
-        assert train_cw and val_cw, (split, "empty list after filtering")
+        if not (train_cw and val_cw):
+            print("split {}: empty after filtering (train pairs={}, kept={}, skipped={} | "
+                  "val pairs={}, kept={}, skipped={})"
+                  .format(split, len(trn_pairs), len(train_data), train_skipped,
+                          len(val_pairs), len(val_data), val_skipped))
+            for name, cls in sorted(trn_pairs)[:5]:
+                img = os.path.join(ROOT, voc_root, "JPEGImages", name + ".jpg")
+                seg = os.path.join(ROOT, voc_root, "SegmentationClass", name + ".png")
+                print("  sample {}__{}: jpg={} png={}".format(
+                    name, cls, os.path.isfile(img), os.path.isfile(seg)))
+            sys.exit("split {}: every pair was dropped. Check voc_root / mask layout above."
+                     .format(split))
         assert set(train_cw) <= base, (split, "train has novel classes", sorted(set(train_cw) - base))
         assert set(val_cw) <= novel, (split, "val has base classes", sorted(set(val_cw) - novel))
         assert all(len(v) >= 2 for v in train_cw.values()), "train class with <2 imgs"
